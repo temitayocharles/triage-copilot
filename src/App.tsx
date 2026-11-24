@@ -57,20 +57,27 @@ function severityClass(severity: string): string {
   return `severity severity-${severity.toLowerCase()}`;
 }
 
-/** Minimal markdown rendering: headings, bold, code, code blocks, lists. */
+/** Minimal markdown rendering: headings, bold, code, code blocks, lists.
+ * Block markers are matched on the trimmed line: the model usually indents
+ * code fences under a numbered step, and column-0 matching rendered those
+ * fences as literal text. Ordered lists carry the number the model wrote
+ * (via `start`), so a list split by a code block or blank line keeps its
+ * numbering instead of restarting at 1 for every step. */
 function renderMarkdown(text: string) {
   const blocks: React.ReactNode[] = [];
   const lines = text.split("\n");
   let i = 0;
   let listItems: string[] | null = null;
   let ordered = false;
+  let listStart = 1;
 
   const flushList = () => {
     if (!listItems) return;
     const items = listItems;
+    const start = listStart;
     if (ordered) {
       blocks.push(
-        <ol key={`ol-${blocks.length}`}>
+        <ol key={`ol-${blocks.length}`} start={start}>
           {items.map((item, idx) => (
             <li key={idx}>{renderInline(item)}</li>
           ))}
@@ -90,12 +97,17 @@ function renderMarkdown(text: string) {
 
   while (i < lines.length) {
     const line = lines[i];
-    if (line.startsWith("```")) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("```")) {
       flushList();
+      // Strip the fence's own indentation from the code lines so an
+      // indented block does not render with a ragged left edge.
+      const indent = line.length - trimmed.length;
+      const stripIndent = new RegExp(`^ {0,${indent}}`);
       const codeLines: string[] = [];
       i += 1;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
+      while (i < lines.length && !lines[i].trimStart().startsWith("```")) {
+        codeLines.push(lines[i].replace(stripIndent, ""));
         i += 1;
       }
       i += 1; // closing fence
@@ -106,32 +118,33 @@ function renderMarkdown(text: string) {
       );
       continue;
     }
-    if (line.startsWith("## ")) {
+    if (trimmed.startsWith("## ")) {
       flushList();
-      blocks.push(<h3 key={`h-${blocks.length}`}>{renderInline(line.slice(3))}</h3>);
+      blocks.push(<h3 key={`h-${blocks.length}`}>{renderInline(trimmed.slice(3))}</h3>);
       i += 1;
       continue;
     }
-    const orderedMatch = line.match(/^\d+\.\s+(.*)/);
-    const bulletMatch = line.match(/^[-*]\s+(.*)/);
+    const orderedMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+    const bulletMatch = trimmed.match(/^[-*]\s+(.*)/);
     if (orderedMatch || bulletMatch) {
       const isOrdered = Boolean(orderedMatch);
       if (listItems === null || ordered !== isOrdered) {
         flushList();
         listItems = [];
         ordered = isOrdered;
+        listStart = orderedMatch ? parseInt(orderedMatch[1], 10) : 1;
       }
-      listItems.push((orderedMatch ?? bulletMatch)![1]);
+      listItems.push(orderedMatch ? orderedMatch[2] : bulletMatch![1]);
       i += 1;
       continue;
     }
-    if (line.trim() === "") {
+    if (trimmed === "") {
       flushList();
       i += 1;
       continue;
     }
     flushList();
-    blocks.push(<p key={`p-${blocks.length}`}>{renderInline(line)}</p>);
+    blocks.push(<p key={`p-${blocks.length}`}>{renderInline(trimmed)}</p>);
     i += 1;
   }
   flushList();
